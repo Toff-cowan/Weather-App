@@ -2,6 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
+import axios from 'axios';
+import * as cheerio from 'cheerio';
+import cron from 'node-cron';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import sgMail from '@sendgrid/mail';
 import twilio from 'twilio';
@@ -27,6 +30,128 @@ const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_T
 
 // Meteosource API Key
 const METEOSOURCE_API_KEY = process.env.METEOSOURCE_API_KEY;
+
+// Store Jamaica weather data in memory
+let jamaicaWeatherData = null;
+
+// Function to parse METAR code into human-readable format
+function parseMETAR(metarString) {
+  try {
+    const parts = metarString.trim().split(/\s+/);
+    
+    const station = parts[0];
+    const time = parts[1];
+    const windRaw = parts[2];
+    const visibility = parts[3];
+    
+    // Parse wind (e.g., "10010KT" = 100° at 10 knots)
+    const windMatch = windRaw?.match(/(\d{3})(\d{2,3})(G\d{2,3})?(KT|MPS)?/);
+    const windDir = windMatch ? parseInt(windMatch[1]) : null;
+    const windSpeed = windMatch ? parseInt(windMatch[2]) : null;
+    const windGust = windMatch?.[3] ? parseInt(windMatch[3].replace('G', '')) : null;
+    
+    // Convert wind direction to compass
+    const getWindDirection = (deg) => {
+      if (!deg) return 'Variable';
+      const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+      return dirs[Math.round(deg / 22.5) % 16];
+    };
+    
+    // Parse clouds (FEW, SCT, BKN, OVC)
+    const cloudCodes = { 'FEW': 'Few clouds', 'SCT': 'Scattered clouds', 'BKN': 'Broken clouds', 'OVC': 'Overcast', 'CLR': 'Clear', 'SKC': 'Sky clear' };
+    let cloudDesc = 'Unknown';
+    for (const part of parts) {
+      for (const [code, desc] of Object.entries(cloudCodes)) {
+        if (part.startsWith(code)) {
+          cloudDesc = desc;
+          break;
+        }
+      }
+    }
+    
+    // Parse temperature/dew point (e.g., "30/24")
+    const tempDewMatch = parts.find(p => p.includes('/') && !p.includes('Q'));
+    const [tempC, dewC] = tempDewMatch?.split('/').map(t => parseInt(t.replace('M', '-'))) || [null, null];
+    const tempF = tempC !== null ? Math.round((tempC * 9/5) + 32) : null;
+    const dewF = dewC !== null ? Math.round((dewC * 9/5) + 32) : null;
+    
+    // Parse pressure (e.g., "Q1012")
+    const pressureMatch = parts.find(p => p.startsWith('Q') || p.startsWith('A'));
+    const pressure = pressureMatch ? pressureMatch.substring(1) : null;
+    
+    // Parse visibility
+    const visibilityKm = visibility === '9999' ? '10+ km' : `${parseInt(visibility)/1000} km`;
+    
+    return {
+      station,
+      stationName: 'Norman Manley International Airport, Kingston',
+      observation_time: time,
+      raw: metarString,
+      parsed: {
+        wind: {
+          direction: windDir,
+          directionCompass: getWindDirection(windDir),
+          speed: windSpeed,
+          gust: windGust,
+          unit: 'knots',
+          description: windSpeed ? `${getWindDirection(windDir)} at ${windSpeed} knots${windGust ? ` gusting to ${windGust} knots` : ''}` : 'Calm'
+        },
+        visibility: {
+          raw: visibility,
+          description: visibilityKm
+        },
+        clouds: cloudDesc,
+        temperature: {
+          celsius: tempC,
+          fahrenheit: tempF,
+          description: `${tempF}°F (${tempC}°C)`
+        },
+        dewPoint: {
+          celsius: dewC,
+          fahrenheit: dewF,
+          description: `${dewF}°F (${dewC}°C)`
+        },
+        pressure: {
+          value: pressure,
+          unit: pressureMatch?.startsWith('Q') ? 'hPa' : 'inHg',
+          description: `${pressure} ${pressureMatch?.startsWith('Q') ? 'hPa' : 'inHg'}`
+        }
+      },
+      summary: `${tempF}°F with ${cloudDesc.toLowerCase()}. Winds from the ${getWindDirection(windDir)} at ${windSpeed || 0} knots. Visibility ${visibilityKm}.`,
+      last_updated: new Date().toISOString()
+    };
+  } catch (error) {
+    console.error('Error parsing METAR:', error.message);
+    return null;
+  }
+}
+
+// Function to scrape Jamaica weather
+async function scrapeJamaicaWeather() {
+  const url = 'https://tgftp.nws.noaa.gov/weather/current/MKJP.html';
+  
+  try {
+    const { data } = await axios.get(url);
+    const $ = cheerio.load(data);
+    const reportText = $('pre').text().trim();
+    
+    if (reportText) {
+      jamaicaWeatherData = parseMETAR(reportText);
+      console.log('✅ Jamaica weather data updated:', jamaicaWeatherData?.summary);
+    }
+  } catch (error) {
+    console.error('⚠️  Error scraping Jamaica weather:', error.message);
+  }
+}
+
+// Initial fetch
+await scrapeJamaicaWeather();
+
+// Schedule updates every hour (at minute 0)
+cron.schedule('0 * * * *', () => {
+  console.log('🔄 Updating Jamaica weather data...');
+  scrapeJamaicaWeather();
+});
 
 // Connect to database
 await connectDatabase();
@@ -190,6 +315,16 @@ app.get('/api/active-storms', async (req, res) => {
     console.error('Error fetching active storms from Meteosource:', error.message);
     res.json([]);
   }
+});
+
+// Endpoint for Jamaica weather
+app.get('/api/weather/jamaica', (req, res) => {
+  if (!jamaicaWeatherData) {
+    return res.status(503).json({ 
+      error: 'Weather data not yet available. Please try again in a moment.' 
+    });
+  }
+  res.json(jamaicaWeatherData);
 });
 
 // Endpoint to submit emergency reports
