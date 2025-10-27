@@ -249,28 +249,23 @@ app.post('/api/chat', async (req, res) => {
   try {
     const { message } = req.body;
     
-    if (!genAI) {
-      return res.status(503).json({ 
-        error: 'AI service not configured. Please add GOOGLE_GEMINI_KEY to .env file' 
-      });
-    }
-
     const activeStorms = await fetch('http://localhost:5000/api/active-storms').then(r => r.json()).catch(() => []);
     const stormAnalytics = await fetch('http://localhost:5000/api/storm-analytics').then(r => r.json()).catch(() => null);
     
-    let stormContext = '';
-    if (activeStorms.length > 0) {
-      stormContext = `\n\nCURRENT ACTIVE STORMS:\n${activeStorms.map(s => 
-        `- ${s.name}: Category ${s.category}, winds ${s.windSpeed}, pressure ${s.pressure}, moving ${s.movement}`
-      ).join('\n')}`;
-    }
-    if (stormAnalytics) {
-      stormContext += `\n\nLATEST STORM DATA:\n${stormAnalytics.stormName}: Current winds ${stormAnalytics.currentStats.maxWindSpeed}, pressure ${stormAnalytics.currentStats.minPressure}, category ${stormAnalytics.currentStats.category}`;
-    }
-    
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    
-    const prompt = `You are a disaster safety assistant helping people during hurricanes and severe weather.
+    if (genAI) {
+      try {
+        let stormContext = '';
+        if (activeStorms.length > 0) {
+          stormContext = `\n\nCURRENT ACTIVE STORMS:\n${activeStorms.map(s => 
+            `- ${s.name}: Category ${s.category}, winds ${s.windSpeed}, pressure ${s.pressure}, moving ${s.movement}`
+          ).join('\n')}`;
+        }
+        if (stormAnalytics) {
+          stormContext += `\n\nLATEST STORM DATA:\n${stormAnalytics.stormName}: Current winds ${stormAnalytics.currentStats.maxWindSpeed}, pressure ${stormAnalytics.currentStats.minPressure}, category ${stormAnalytics.currentStats.category}`;
+        }
+        
+        const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+        const prompt = `You are a disaster safety assistant helping people during hurricanes and severe weather.
 Provide clear, concise, and actionable safety advice.
 ${stormContext}
 
@@ -278,9 +273,48 @@ User question: ${message}
 
 If the user asks about current hurricanes or storms, tell them about the active storms listed above with specific details. Otherwise, provide helpful safety tips and emergency guidance:`;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const reply = response.text();
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const reply = response.text();
+        
+        return res.json({ reply });
+      } catch (aiError) {
+        console.log('AI failed, using fallback:', aiError.message);
+      }
+    }
+    
+    const lowerMessage = message.toLowerCase();
+    let reply = '';
+    
+    if (lowerMessage.includes('hurricane') || lowerMessage.includes('storm') || lowerMessage.includes('current') || lowerMessage.includes('active')) {
+      if (activeStorms.length > 0 || stormAnalytics) {
+        reply = '**Current Hurricane Information:**\n\n';
+        if (activeStorms.length > 0) {
+          reply += 'Active Storms:\n';
+          activeStorms.forEach(storm => {
+            reply += `• ${storm.name} - Category ${storm.category}\n`;
+            reply += `  Winds: ${storm.windSpeed} | Pressure: ${storm.pressure}\n`;
+            reply += `  Movement: ${storm.movement} | Status: ${storm.status}\n\n`;
+          });
+        }
+        if (stormAnalytics) {
+          reply += `\nLatest Data for ${stormAnalytics.stormName}:\n`;
+          reply += `• Category: ${stormAnalytics.currentStats.category}\n`;
+          reply += `• Max Winds: ${stormAnalytics.currentStats.maxWindSpeed}\n`;
+          reply += `• Min Pressure: ${stormAnalytics.currentStats.minPressure}\n`;
+          reply += `• Movement: ${stormAnalytics.currentStats.movement}\n\n`;
+        }
+        reply += '\n**Safety Reminder:** If you\'re in the affected area, follow local evacuation orders and stay informed through official channels.';
+      } else {
+        reply = 'Currently, there are no active hurricane systems being tracked. However, it\'s always good to stay prepared during hurricane season. Would you like tips on hurricane preparedness?';
+      }
+    } else if (lowerMessage.includes('evacuat')) {
+      reply = '**Evacuation Guidelines:**\n\n1. Follow official evacuation orders immediately\n2. Take your emergency kit\n3. Bring important documents\n4. Tell someone where you\'re going\n5. Use recommended evacuation routes\n6. Don\'t drive through flooded areas\n7. Turn off utilities if instructed\n8. Lock your home';
+    } else if (lowerMessage.includes('supply') || lowerMessage.includes('kit')) {
+      reply = '**Emergency Supply Kit Essentials:**\n\n1. Water (1 gallon per person per day)\n2. Non-perishable food (3-day supply)\n3. First aid kit\n4. Flashlight and extra batteries\n5. Battery-powered radio\n6. Medications (7-day supply)\n7. Important documents in waterproof container\n8. Cash\n9. Phone chargers\n10. Basic tools';
+    } else {
+      reply = 'I can help with:\n\n• Current hurricane information\n• Hurricane & storm preparedness\n• Evacuation procedures\n• Emergency supply kits\n• Flood safety\n• Power outage tips\n\nWhat would you like to know more about?';
+    }
     
     res.json({ reply });
   } catch (error) {
