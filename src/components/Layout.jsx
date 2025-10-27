@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Menu, X, MapPin, AlertTriangle, BarChart3, Bluetooth, Phone } from 'lucide-react';
+import { Menu, X, MapPin, AlertTriangle, BarChart3, Bluetooth, Phone, Cloud } from 'lucide-react';
 import ChatBot from './ChatBot';
 
 const Layout = ({ children }) => {
@@ -9,10 +9,11 @@ const Layout = ({ children }) => {
 
   const navItems = [
     { path: '/', label: 'Map', icon: MapPin },
-    { path: '/report', label: 'Report Emergency', icon: AlertTriangle },
     { path: '/analytics', label: 'Analytics', icon: BarChart3 },
-    { path: '/bluetooth', label: 'Bluetooth', icon: Bluetooth },
+    { path: '/jamaica-weather', label: '🇯🇲 Weather', icon: Cloud },
+    { path: '/report', label: 'Report Emergency', icon: AlertTriangle },
     { path: '/contacts', label: 'Emergency Contacts', icon: Phone },
+    { path: '/bluetooth', label: 'Bluetooth', icon: Bluetooth },
   ];
 
   const isActive = (path) => location.pathname === path;
