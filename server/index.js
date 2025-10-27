@@ -255,14 +255,28 @@ app.post('/api/chat', async (req, res) => {
       });
     }
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const activeStorms = await fetch('http://localhost:5000/api/active-storms').then(r => r.json()).catch(() => []);
+    const stormAnalytics = await fetch('http://localhost:5000/api/storm-analytics').then(r => r.json()).catch(() => null);
+    
+    let stormContext = '';
+    if (activeStorms.length > 0) {
+      stormContext = `\n\nCURRENT ACTIVE STORMS:\n${activeStorms.map(s => 
+        `- ${s.name}: Category ${s.category}, winds ${s.windSpeed}, pressure ${s.pressure}, moving ${s.movement}`
+      ).join('\n')}`;
+    }
+    if (stormAnalytics) {
+      stormContext += `\n\nLATEST STORM DATA:\n${stormAnalytics.stormName}: Current winds ${stormAnalytics.currentStats.maxWindSpeed}, pressure ${stormAnalytics.currentStats.minPressure}, category ${stormAnalytics.currentStats.category}`;
+    }
+    
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     
     const prompt = `You are a disaster safety assistant helping people during hurricanes and severe weather.
 Provide clear, concise, and actionable safety advice.
+${stormContext}
 
 User question: ${message}
 
-Provide a helpful response with safety tips and emergency guidance:`;
+If the user asks about current hurricanes or storms, tell them about the active storms listed above with specific details. Otherwise, provide helpful safety tips and emergency guidance:`;
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
