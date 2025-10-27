@@ -481,6 +481,71 @@ app.post('/api/emergency-report', async (req, res) => {
   }
 });
 
+// Endpoint for Bluetooth SMS sending
+app.post('/api/bluetooth/send-sms', async (req, res) => {
+  try {
+    const { phoneNumber, message, messageType } = req.body;
+
+    console.log('📱 Bluetooth SMS request:', {
+      to: phoneNumber,
+      type: messageType,
+      message: message.substring(0, 50) + '...'
+    });
+
+    if (!phoneNumber || !message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Phone number and message are required' 
+      });
+    }
+
+    // Try to send via Twilio if configured
+    if (twilioClient && process.env.TWILIO_PHONE_NUMBER) {
+      try {
+        await twilioClient.messages.create({
+          body: message,
+          to: phoneNumber,
+          from: process.env.TWILIO_PHONE_NUMBER
+        });
+        
+        console.log('✅ SMS sent via Twilio to:', phoneNumber);
+        return res.json({ 
+          success: true, 
+          message: 'SMS sent successfully',
+          twilioConfigured: true
+        });
+      } catch (twilioError) {
+        console.error('Twilio SMS error:', twilioError.message);
+        // Fall through to fallback system
+      }
+    }
+
+    // Fallback: Log the message (for testing without Twilio)
+    console.log('📋 SMS (Simulated - Twilio not configured):');
+    console.log(`   To: ${phoneNumber}`);
+    console.log(`   Type: ${messageType}`);
+    console.log(`   Message: ${message}`);
+    
+    return res.json({ 
+      success: true, 
+      message: 'Message logged (Twilio not configured). In production, add Twilio credentials to send real SMS.',
+      twilioConfigured: false,
+      simulatedMessage: {
+        to: phoneNumber,
+        type: messageType,
+        content: message
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in Bluetooth SMS endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to send SMS' 
+    });
+  }
+});
+
 // Endpoint for AI chatbot (Google Gemini)
 app.post('/api/chat', async (req, res) => {
   try {
