@@ -69,18 +69,24 @@ function parseMETAR(metarString) {
       }
     }
     
-    // Parse temperature/dew point (e.g., "30/24")
-    const tempDewMatch = parts.find(p => p.includes('/') && !p.includes('Q'));
-    const [tempC, dewC] = tempDewMatch?.split('/').map(t => parseInt(t.replace('M', '-'))) || [null, null];
-    const tempF = tempC !== null ? Math.round((tempC * 9/5) + 32) : null;
-    const dewF = dewC !== null ? Math.round((dewC * 9/5) + 32) : null;
+    // Parse temperature/dew point (e.g., "30/24") - filter out //// which means missing data
+    const tempDewMatch = parts.find(p => p.includes('/') && !p.includes('Q') && !p.includes('////'));
+    const [tempC, dewC] = tempDewMatch?.split('/').map(t => {
+      const cleaned = t.replace('M', '-');
+      return cleaned && !cleaned.includes('/') ? parseInt(cleaned) : null;
+    }) || [null, null];
+    const tempF = tempC !== null && !isNaN(tempC) ? Math.round((tempC * 9/5) + 32) : null;
+    const dewF = dewC !== null && !isNaN(dewC) ? Math.round((dewC * 9/5) + 32) : null;
     
     // Parse pressure (e.g., "Q1012")
-    const pressureMatch = parts.find(p => p.startsWith('Q') || p.startsWith('A'));
+    const pressureMatch = parts.find(p => (p.startsWith('Q') || p.startsWith('A')) && p.length > 2);
     const pressure = pressureMatch ? pressureMatch.substring(1) : null;
     
-    // Parse visibility
-    const visibilityKm = visibility === '9999' ? '10+ km' : `${parseInt(visibility)/1000} km`;
+    // Parse visibility - handle //// as missing data
+    let visibilityKm = 'Unknown';
+    if (visibility && !visibility.includes('/')) {
+      visibilityKm = visibility === '9999' ? '10+ km' : `${parseInt(visibility)/1000} km`;
+    }
     
     return {
       station,
@@ -117,7 +123,7 @@ function parseMETAR(metarString) {
           description: `${pressure} ${pressureMatch?.startsWith('Q') ? 'hPa' : 'inHg'}`
         }
       },
-      summary: `${tempF}°F with ${cloudDesc.toLowerCase()}. Winds from the ${getWindDirection(windDir)} at ${windSpeed || 0} knots. Visibility ${visibilityKm}.`,
+      summary: tempF ? `${tempF}°F with ${cloudDesc.toLowerCase()}. Winds from the ${getWindDirection(windDir)} at ${windSpeed || 0} knots. Visibility ${visibilityKm}.` : `Winds from the ${getWindDirection(windDir)} at ${windSpeed || 0} knots. ${cloudDesc}. Visibility ${visibilityKm}.`,
       last_updated: new Date().toISOString()
     };
   } catch (error) {
@@ -133,11 +139,26 @@ async function scrapeJamaicaWeather() {
   try {
     const { data } = await axios.get(url);
     const $ = cheerio.load(data);
-    const reportText = $('pre').text().trim();
+    
+    // Find the table row with "ob" label and extract the METAR data
+    let reportText = '';
+    $('tr').each((_, row) => {
+      const label = $(row).find('b font').text().trim().toLowerCase();
+      if (label === 'ob') {
+        reportText = $(row).find('td').last().text().trim();
+      }
+    });
+    
+    if (!reportText) {
+      // Fallback: try to find any text that starts with MKJP
+      reportText = $('body').text().match(/MKJP\s+\d+Z[^\n]*/)?.[0] || '';
+    }
     
     if (reportText) {
       jamaicaWeatherData = parseMETAR(reportText);
       console.log('✅ Jamaica weather data updated:', jamaicaWeatherData?.summary);
+    } else {
+      console.log('⚠️  Could not find METAR data in response');
     }
   } catch (error) {
     console.error('⚠️  Error scraping Jamaica weather:', error.message);
