@@ -70,6 +70,31 @@ app.get('/api/storm-analytics', async (req, res) => {
       console.log('Could not parse storm data');
     }
 
+    // Add demo data if no real storm data (for testing)
+    if (!stormData && process.env.NODE_ENV === 'development') {
+      stormData = {
+        stormName: 'Hurricane Milton',
+        windSpeedHistory: {
+          labels: ['Day 1', 'Day 2', 'Day 3', 'Day 4'],
+          data: [85, 110, 130, 140]
+        },
+        pressureHistory: {
+          labels: ['Day 1', 'Day 2', 'Day 3', 'Day 4'],
+          data: [990, 975, 960, 955]
+        },
+        sizeGrowth: {
+          labels: ['Day 1', 'Day 2', 'Day 3', 'Day 4'],
+          data: [100, 125, 150, 175]
+        },
+        currentStats: {
+          maxWindSpeed: '140 mph',
+          minPressure: '955 mb',
+          movement: 'NW at 12 mph',
+          category: '4'
+        }
+      };
+    }
+
     res.json(stormData);
   } catch (error) {
     console.error('Error scraping storm data:', error.message);
@@ -103,6 +128,20 @@ app.get('/api/active-storms', async (req, res) => {
         });
       }
     });
+
+    // Add demo data if no real storms (for testing)
+    if (activeStorms.length === 0 && process.env.NODE_ENV === 'development') {
+      activeStorms.push({
+        id: 1,
+        name: 'Hurricane Milton',
+        category: 4,
+        windSpeed: '140 mph',
+        pressure: '955 mb',
+        location: { lat: 18.5, lon: -75.2 },
+        movement: 'NW at 12 mph',
+        status: 'Active (Demo Data)'
+      });
+    }
 
     res.json(activeStorms);
   } catch (error) {
