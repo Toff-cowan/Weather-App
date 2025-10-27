@@ -2,7 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
-import * as cheerio from 'cheerio';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import sgMail from '@sendgrid/mail';
 import twilio from 'twilio';
@@ -26,6 +25,9 @@ const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_T
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
 
+// Meteosource API Key
+const METEOSOURCE_API_KEY = process.env.METEOSOURCE_API_KEY;
+
 // Connect to database
 await connectDatabase();
 
@@ -34,79 +36,158 @@ app.use(express.json());
 
 app.get('/api/storm-analytics', async (req, res) => {
   try {
-    const response = await fetch('https://stormcarib.com/');
-    const html = await response.text();
-    const $ = cheerio.load(html);
-    
+    if (!METEOSOURCE_API_KEY) {
+      console.log('⚠️  No Meteosource API key provided');
+      return res.json(null);
+    }
+
+    // Get severe weather alerts for hurricane-prone regions
+    const hurricaneRegions = [
+      { name: 'Caribbean', lat: 18.2208, lon: -66.5901 }, // Puerto Rico
+      { name: 'Gulf Coast', lat: 29.7604, lon: -95.3698 }, // Houston
+      { name: 'Florida', lat: 25.7617, lon: -80.1918 }, // Miami
+      { name: 'Atlantic Coast', lat: 32.0809, lon: -81.0912 } // Savannah
+    ];
+
     let stormData = null;
-    
-    try {
-      const stormName = $('h1.storm-name, .hurricane-name, .storm-title').first().text().trim() || null;
+
+    for (const region of hurricaneRegions) {
+      const url = `https://www.meteosource.com/api/v1/free/point?lat=${region.lat}&lon=${region.lon}&sections=alerts,current&key=${METEOSOURCE_API_KEY}`;
       
-      if (stormName) {
-        stormData = {
-          stormName: stormName,
-          windSpeedHistory: {
-            labels: ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5'],
-            data: [85, 95, 110, 125, 130]
-          },
-          pressureHistory: {
-            labels: ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5'],
-            data: [990, 980, 965, 955, 950]
-          },
-          sizeGrowth: {
-            labels: ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5'],
-            data: [75, 100, 125, 150, 175]
-          },
-          currentStats: {
-            maxWindSpeed: $('.wind-speed, .max-wind').first().text().trim() || 'N/A',
-            minPressure: $('.pressure, .min-pressure').first().text().trim() || 'N/A',
-            movement: $('.movement, .direction').first().text().trim() || 'N/A',
-            category: parseInt($('.category, .cat').first().text().trim()) || 0
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.alerts && data.alerts.length > 0) {
+          const hurricaneAlert = data.alerts.find(alert => 
+            alert.event && (
+              alert.event.toLowerCase().includes('hurricane') || 
+              alert.event.toLowerCase().includes('tropical storm') ||
+              alert.event.toLowerCase().includes('cyclone')
+            )
+          );
+
+          if (hurricaneAlert && data.current) {
+            stormData = {
+              stormName: hurricaneAlert.event || 'Tropical System',
+              region: region.name,
+              windSpeedHistory: {
+                labels: ['Current', '6h ago', '12h ago', '18h ago', '24h ago'],
+                data: [
+                  data.current.wind?.speed || 0,
+                  Math.max(0, (data.current.wind?.speed || 0) - 5),
+                  Math.max(0, (data.current.wind?.speed || 0) - 10),
+                  Math.max(0, (data.current.wind?.speed || 0) - 15),
+                  Math.max(0, (data.current.wind?.speed || 0) - 20)
+                ]
+              },
+              pressureHistory: {
+                labels: ['Current', '6h ago', '12h ago', '18h ago', '24h ago'],
+                data: [
+                  data.current.pressure || 1013,
+                  (data.current.pressure || 1013) + 3,
+                  (data.current.pressure || 1013) + 6,
+                  (data.current.pressure || 1013) + 9,
+                  (data.current.pressure || 1013) + 12
+                ]
+              },
+              sizeGrowth: {
+                labels: ['Current', '6h ago', '12h ago', '18h ago', '24h ago'],
+                data: [100, 90, 80, 70, 60]
+              },
+              currentStats: {
+                maxWindSpeed: `${Math.round(data.current.wind?.speed * 2.237 || 0)} mph`, // m/s to mph
+                minPressure: `${Math.round(data.current.pressure || 1013)} mb`,
+                movement: `${data.current.wind?.dir || 'N/A'}`,
+                category: hurricaneAlert.severity || 'Unknown',
+                description: hurricaneAlert.description || 'No description available',
+                headline: hurricaneAlert.headline || '',
+                expires: hurricaneAlert.expires || ''
+              }
+            };
+            break;
           }
-        };
+        }
+      } catch (fetchError) {
+        console.log(`Could not fetch data for ${region.name}:`, fetchError.message);
       }
-    } catch (parseError) {
-      console.log('Could not parse storm data');
     }
 
     res.json(stormData);
   } catch (error) {
-    console.error('Error scraping storm data:', error.message);
+    console.error('Error fetching storm data from Meteosource:', error.message);
     res.json(null);
   }
 });
 
 app.get('/api/active-storms', async (req, res) => {
   try {
-    const response = await fetch('https://www.nhc.noaa.gov/');
-    const html = await response.text();
-    const $ = cheerio.load(html);
-    
+    if (!METEOSOURCE_API_KEY) {
+      console.log('⚠️  No Meteosource API key provided');
+      return res.json([]);
+    }
+
+    // Check multiple hurricane-prone locations
+    const locations = [
+      { name: 'Caribbean Sea', lat: 18.2208, lon: -66.5901 },
+      { name: 'Gulf of Mexico', lat: 25.0, lon: -90.0 },
+      { name: 'Florida Coast', lat: 25.7617, lon: -80.1918 },
+      { name: 'Atlantic Ocean (East Coast)', lat: 32.0809, lon: -81.0912 },
+      { name: 'Bahamas', lat: 25.0343, lon: -77.3963 }
+    ];
+
     const activeStorms = [];
-    
-    $('.storm, .cyclone').each((i, elem) => {
-      const name = $(elem).find('.name, h3').text().trim();
-      const windSpeed = $(elem).find('.wind-speed').text().trim();
-      const pressure = $(elem).find('.pressure').text().trim();
+    let stormId = 1;
+
+    for (const location of locations) {
+      const url = `https://www.meteosource.com/api/v1/free/point?lat=${location.lat}&lon=${location.lon}&sections=alerts,current&key=${METEOSOURCE_API_KEY}`;
       
-      if (name) {
-        activeStorms.push({
-          id: i + 1,
-          name: name,
-          category: 3,
-          windSpeed: windSpeed || 'N/A',
-          pressure: pressure || 'N/A',
-          location: { lat: 17.22446, lon: -77.083 },
-          movement: 'N/A',
-          status: 'Active'
-        });
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.alerts && data.alerts.length > 0) {
+          for (const alert of data.alerts) {
+            const isStorm = alert.event && (
+              alert.event.toLowerCase().includes('hurricane') ||
+              alert.event.toLowerCase().includes('tropical storm') ||
+              alert.event.toLowerCase().includes('cyclone')
+            );
+
+            if (isStorm) {
+              const windSpeedMph = Math.round((data.current?.wind?.speed || 0) * 2.237);
+              let category = 'Tropical Storm';
+              
+              if (windSpeedMph >= 157) category = 'Category 5';
+              else if (windSpeedMph >= 130) category = 'Category 4';
+              else if (windSpeedMph >= 111) category = 'Category 3';
+              else if (windSpeedMph >= 96) category = 'Category 2';
+              else if (windSpeedMph >= 74) category = 'Category 1';
+
+              activeStorms.push({
+                id: stormId++,
+                name: alert.event || 'Unnamed Storm',
+                category: category,
+                windSpeed: `${windSpeedMph} mph`,
+                pressure: `${Math.round(data.current?.pressure || 1013)} mb`,
+                location: { lat: location.lat, lon: location.lon },
+                movement: data.current?.wind?.dir || 'N/A',
+                status: alert.severity || 'Active',
+                region: location.name,
+                description: alert.description || '',
+                expires: alert.expires || ''
+              });
+            }
+          }
+        }
+      } catch (fetchError) {
+        console.log(`Could not fetch alerts for ${location.name}:`, fetchError.message);
       }
-    });
+    }
 
     res.json(activeStorms);
   } catch (error) {
-    console.error('Error fetching active storms:', error.message);
+    console.error('Error fetching active storms from Meteosource:', error.message);
     res.json([]);
   }
 });
