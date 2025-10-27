@@ -6,6 +6,7 @@ import EmergencyReportPage from './pages/EmergencyReportPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import BluetoothPage from './pages/BluetoothPage';
 import EmergencyContactsPage from './pages/EmergencyContactsPage';
+import JamaicaWeatherPage from './pages/JamaicaWeatherPage';
 import OnboardingGuide from './components/OnboardingGuide';
 
 function App() {
@@ -34,6 +35,7 @@ function App() {
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/bluetooth" element={<BluetoothPage />} />
           <Route path="/contacts" element={<EmergencyContactsPage />} />
+          <Route path="/jamaica-weather" element={<JamaicaWeatherPage />} />
         </Routes>
       </Layout>
     </Router>
